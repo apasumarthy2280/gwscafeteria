@@ -1,4 +1,4 @@
-# GWSCafeteria Forms Dashboard - Reads food availability and meal feedback from Microsoft Forms Excel exports
+# GWSCafeteria Dashboard - Auto-reads from Google Sheets synced via Power Automate from Microsoft Forms
 # Co-authored with CoCo
 import streamlit as st
 import pandas as pd
@@ -7,17 +7,6 @@ from datetime import date, timedelta
 from openai import OpenAI
 
 # --- Config ---
-# Replace these with your OneDrive/SharePoint direct download links for each form's Excel responses.
-# To get the link: Open Form > Responses tab > "Open in Excel" > Share > Copy link > change "edit" to "download"
-# Or: OneDrive > right-click the Excel file > Embed > use the download URL
-
-FOOD_TRACKER_EXCEL_URL = st.secrets.get("forms", {}).get(
-    "food_tracker_url", ""
-)
-MEAL_FEEDBACK_EXCEL_URL = st.secrets.get("forms", {}).get(
-    "meal_feedback_url", ""
-)
-
 FOOD_ITEMS = [
     "Salad", "Rotis", "Dry Veg", "Wet Veg", "Rasam / Sambar",
     "Dal", "Steamed Rice", "Flavoured Rice", "Curd", "Dessert",
@@ -28,59 +17,49 @@ FEEDBACK_CRITERIA = ["Portioning", "Taste", "Texture", "Presentation", "Aroma"]
 FLOORS = ["8th Floor", "9th Floor"]
 
 
-# --- Data Loading ---
+# --- Data Loading from Google Sheets ---
 @st.cache_data(ttl=300)
 def load_food_tracker():
-    """Load food availability data from Microsoft Forms Excel."""
-    if not FOOD_TRACKER_EXCEL_URL:
+    url = st.secrets.get("google_sheets", {}).get("food_tracker_url", "")
+    if not url:
         return pd.DataFrame()
     try:
-        df = pd.read_excel(FOOD_TRACKER_EXCEL_URL)
+        df = pd.read_csv(url)
         df.columns = df.columns.str.strip()
-        # Expected columns from the form:
-        # Date, Check Time, Floor, Salad, Rotis, Dry Veg, Wet Veg, Rasam / Sambar,
-        # Dal, Steamed Rice, Flavoured Rice, Curd, Dessert, Refreshment/Juice,
-        # Remarks, No of Registrations Received, Food Projected for the Day, Actual Consumption, Projection Comments
         if "Date" in df.columns:
             df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
         return df
     except Exception as e:
-        st.error(f"Error loading Food Tracker data: {e}")
+        st.error(f"Error loading Food Tracker: {e}")
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
 def load_meal_feedback():
-    """Load meal feedback data from Microsoft Forms Excel."""
-    if not MEAL_FEEDBACK_EXCEL_URL:
+    url = st.secrets.get("google_sheets", {}).get("meal_feedback_url", "")
+    if not url:
         return pd.DataFrame()
     try:
-        df = pd.read_excel(MEAL_FEEDBACK_EXCEL_URL)
+        df = pd.read_csv(url)
         df.columns = df.columns.str.strip()
-        # Expected columns from the form:
-        # Feedback Date, Floor, Employee Name, Employee ID, Vendor Name,
-        # Portioning, Taste, Texture, Presentation, Aroma, Overall Rating,
-        # Highlights, Low Lights, Corrective Action
         if "Feedback Date" in df.columns:
             df["Feedback Date"] = pd.to_datetime(df["Feedback Date"], errors="coerce").dt.date
         return df
     except Exception as e:
-        st.error(f"Error loading Meal Feedback data: {e}")
+        st.error(f"Error loading Meal Feedback: {e}")
         return pd.DataFrame()
 
 
 def ai_complete(prompt):
-    """Call OpenAI for AI assistant."""
     try:
         api_key = st.secrets.get("openai", {}).get("api_key", "")
         if not api_key:
-            return "OpenAI API key not configured. Add it to .streamlit/secrets.toml under [openai] api_key."
+            return "OpenAI API key not configured."
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0.7,
+            max_tokens=500, temperature=0.7,
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -113,26 +92,20 @@ def page_dashboard():
     feedback_df = load_meal_feedback()
     today = date.today()
 
-    # Metrics
     col1, col2, col3, col4 = st.columns(4)
 
-    # Food availability today
+    avail_pct = 0
     if not food_df.empty and "Date" in food_df.columns:
         today_food = food_df[food_df["Date"] == today]
-        total_checks = 0
-        available_checks = 0
+        total_checks, available_checks = 0, 0
         for _, row in today_food.iterrows():
             for item in FOOD_ITEMS:
                 if item in row:
                     total_checks += 1
-                    val = str(row[item]).strip().lower()
-                    if val in ("yes", "true", "1", "available"):
+                    if str(row[item]).strip().lower() in ("yes", "true", "1", "available"):
                         available_checks += 1
         avail_pct = round((available_checks / total_checks) * 100, 1) if total_checks > 0 else 0
-    else:
-        avail_pct = 0
 
-    # Projection
     projected, actual = 0, 0
     if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns:
         today_proj = food_df[food_df["Date"] == today]
@@ -140,11 +113,9 @@ def page_dashboard():
         if "Actual Consumption" in food_df.columns:
             actual = int(today_proj["Actual Consumption"].sum()) if not today_proj.empty else 0
 
-    # Avg rating
     avg_r = 0
     if not feedback_df.empty and "Feedback Date" in feedback_df.columns and "Overall Rating" in feedback_df.columns:
-        week_ago = today - timedelta(days=7)
-        recent = feedback_df[feedback_df["Feedback Date"] >= week_ago]
+        recent = feedback_df[feedback_df["Feedback Date"] >= today - timedelta(days=7)]
         if not recent.empty:
             avg_r = round(recent["Overall Rating"].mean(), 1)
 
@@ -158,8 +129,6 @@ def page_dashboard():
         st.markdown(f'<div class="metric-card"><div class="metric-value">{avg_r}/5</div><div class="metric-label">Avg Rating (7 days)</div></div>', unsafe_allow_html=True)
 
     st.divider()
-
-    # Today's food availability grid
     st.subheader("Today's Food Availability")
     if not food_df.empty and "Date" in food_df.columns:
         today_food = food_df[food_df["Date"] == today]
@@ -170,47 +139,29 @@ def page_dashboard():
                     st.markdown(f"**{floor}**")
                     display_rows = []
                     for _, row in floor_data.iterrows():
-                        check_time = row.get("Check Time", "")
-                        item_status = {}
+                        item_status = {"Check Time": row.get("Check Time", "")}
                         for item in FOOD_ITEMS:
-                            if item in row:
-                                val = str(row[item]).strip().lower()
-                                item_status[item] = "✅" if val in ("yes", "true", "1", "available") else "❌"
-                            else:
-                                item_status[item] = "—"
-                        item_status["Check Time"] = check_time
+                            val = str(row.get(item, "")).strip().lower()
+                            item_status[item] = "✅" if val in ("yes", "true", "1", "available") else "❌" if val else "—"
                         display_rows.append(item_status)
                     if display_rows:
-                        grid_df = pd.DataFrame(display_rows).set_index("Check Time")
-                        st.dataframe(grid_df, use_container_width=True)
+                        st.dataframe(pd.DataFrame(display_rows).set_index("Check Time"), use_container_width=True)
         else:
             st.info("No availability data recorded yet today.")
     else:
-        st.info("No food tracker data available. Check your Excel link in settings.")
+        st.info("No food tracker data available.")
 
     st.divider()
-
-    # Projection vs consumption trend
     st.subheader("Projection vs Consumption (Last 14 Days)")
-    if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns:
+    if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns and "Actual Consumption" in food_df.columns:
         cutoff = today - timedelta(days=14)
         trend = food_df[food_df["Date"] >= cutoff].copy()
-        if not trend.empty and "Actual Consumption" in trend.columns:
-            trend_agg = trend.groupby(["Date", "Floor"]).agg(
-                Projected=("Food Projected for the Day", "sum"),
-                Actual=("Actual Consumption", "sum")
-            ).reset_index()
+        if not trend.empty and "Floor" in trend.columns:
+            trend_agg = trend.groupby(["Date", "Floor"]).agg(Projected=("Food Projected for the Day", "sum"), Actual=("Actual Consumption", "sum")).reset_index()
             if not trend_agg.empty:
                 melted = trend_agg.melt(id_vars=["Date", "Floor"], value_vars=["Projected", "Actual"], var_name="Type", value_name="Meal Count")
-                chart = alt.Chart(melted).mark_line(point=True).encode(
-                    x=alt.X("Date:T", title="Date"), y=alt.Y("Meal Count:Q"),
-                    color="Floor:N", strokeDash="Type:N"
-                ).properties(height=350)
+                chart = alt.Chart(melted).mark_line(point=True).encode(x=alt.X("Date:T"), y="Meal Count:Q", color="Floor:N", strokeDash="Type:N").properties(height=350)
                 st.altair_chart(chart, use_container_width=True)
-            else:
-                st.info("No projection data available yet.")
-        else:
-            st.info("No projection data available yet.")
     else:
         st.info("No projection data available yet.")
 
@@ -228,25 +179,15 @@ def page_analytics():
 
     with tab1:
         if not feedback_df.empty and "Feedback Date" in feedback_df.columns and "Overall Rating" in feedback_df.columns:
-            cutoff = today - timedelta(days=30)
-            recent = feedback_df[feedback_df["Feedback Date"] >= cutoff].copy()
+            recent = feedback_df[feedback_df["Feedback Date"] >= today - timedelta(days=30)].copy()
             if not recent.empty and "Floor" in recent.columns:
-                daily = recent.groupby(["Feedback Date", "Floor"]).agg(
-                    Overall=("Overall Rating", "mean"),
-                    Portioning=("Portioning", "mean"),
-                    Taste=("Taste", "mean"),
-                    Texture=("Texture", "mean"),
-                    Presentation=("Presentation", "mean"),
-                    Aroma=("Aroma", "mean"),
-                ).reset_index()
-
+                daily = recent.groupby(["Feedback Date", "Floor"]).agg(Overall=("Overall Rating", "mean")).reset_index()
                 target_line = alt.Chart(pd.DataFrame({"y": [3]})).mark_rule(strokeDash=[5, 5], color="orange").encode(y="y:Q")
                 line_chart = alt.Chart(daily).mark_line(point=True).encode(
-                    x=alt.X("Feedback Date:T", title="Date"), y=alt.Y("Overall:Q", title="Overall Rating"), color="Floor:N"
+                    x=alt.X("Feedback Date:T"), y=alt.Y("Overall:Q", title="Overall Rating"), color="Floor:N"
                 ).properties(height=350, title="Overall Rating Trend (Last 30 Days)")
                 st.altair_chart(line_chart + target_line, use_container_width=True)
 
-                # Criteria bar chart
                 avg_vals = recent[FEEDBACK_CRITERIA].mean()
                 criteria_df = pd.DataFrame({"Criteria": FEEDBACK_CRITERIA, "Score": avg_vals.values})
                 criteria_chart = alt.Chart(criteria_df).mark_bar(color="#0891B2", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
@@ -260,8 +201,7 @@ def page_analytics():
 
     with tab2:
         if not food_df.empty and "Date" in food_df.columns:
-            cutoff = today - timedelta(days=14)
-            recent_food = food_df[food_df["Date"] >= cutoff]
+            recent_food = food_df[food_df["Date"] >= today - timedelta(days=14)]
             if not recent_food.empty:
                 item_avail = {}
                 for item in FOOD_ITEMS:
@@ -271,41 +211,30 @@ def page_analytics():
                         avail = vals.isin(["yes", "true", "1", "available"]).sum()
                         item_avail[item] = round((avail / total) * 100, 1) if total > 0 else 0
                 if item_avail:
-                    avail_summary = pd.DataFrame({"Item": list(item_avail.keys()), "Availability %": list(item_avail.values())})
-                    avail_summary = avail_summary.sort_values("Availability %")
+                    avail_summary = pd.DataFrame({"Item": list(item_avail.keys()), "Availability %": list(item_avail.values())}).sort_values("Availability %")
                     fig = alt.Chart(avail_summary).mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4).encode(
                         x=alt.X("Availability %:Q", scale=alt.Scale(domain=[0, 100])),
                         y=alt.Y("Item:N", sort=alt.EncodingSortField(field="Availability %", order="ascending")),
                         color=alt.Color("Availability %:Q", scale=alt.Scale(domain=[0, 50, 100], range=["#EF4444", "#F59E0B", "#10B981"]), legend=None)
                     ).properties(height=400, title="Item Availability Rate (Last 14 Days)")
                     st.altair_chart(fig, use_container_width=True)
-                else:
-                    st.info("No item availability columns found.")
-            else:
-                st.info("No availability data in the last 14 days.")
         else:
             st.info("No availability data yet.")
 
     with tab3:
         if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns and "Actual Consumption" in food_df.columns:
-            cutoff = today - timedelta(days=14)
-            recent_proj = food_df[food_df["Date"] >= cutoff].copy()
+            recent_proj = food_df[food_df["Date"] >= today - timedelta(days=14)].copy()
             if not recent_proj.empty:
                 recent_proj["Waste"] = recent_proj["Food Projected for the Day"] - recent_proj["Actual Consumption"]
                 recent_proj["Waste %"] = (recent_proj["Waste"] / recent_proj["Food Projected for the Day"].replace(0, pd.NA) * 100).round(1)
-
                 if "Floor" in recent_proj.columns:
                     zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="black").encode(y="y:Q")
                     waste_chart = alt.Chart(recent_proj).mark_bar().encode(
-                        x=alt.X("Date:T", title="Date"), y=alt.Y("Waste:Q", title="Surplus Meals"),
-                        color="Floor:N", xOffset="Floor:N"
+                        x=alt.X("Date:T"), y=alt.Y("Waste:Q", title="Surplus Meals"), color="Floor:N", xOffset="Floor:N"
                     ).properties(height=350, title="Food Waste (Projected - Actual) Last 14 Days")
                     st.altair_chart(waste_chart + zero_line, use_container_width=True)
-
                 avg_waste = recent_proj["Waste %"].mean()
                 st.markdown(f'<div class="metric-card"><div class="metric-value">{avg_waste:.1f}%</div><div class="metric-label">Average Surplus Rate (14 days)</div></div>', unsafe_allow_html=True)
-            else:
-                st.info("No projection data in the last 14 days.")
         else:
             st.info("No projection data available yet.")
 
@@ -321,30 +250,24 @@ def page_ai_assistant():
 
     context_parts = []
     if not feedback_df.empty and "Feedback Date" in feedback_df.columns:
-        week_ago = today - timedelta(days=7)
-        recent = feedback_df[feedback_df["Feedback Date"] >= week_ago]
-        if not recent.empty:
-            context_parts.append(
-                f"Recent feedback (last 7 days, {len(recent)} entries): "
-                f"Avg rating: {recent['Overall Rating'].mean():.1f}/5. "
-            )
+        recent = feedback_df[feedback_df["Feedback Date"] >= today - timedelta(days=7)]
+        if not recent.empty and "Overall Rating" in recent.columns:
+            context_parts.append(f"Recent feedback (last 7 days, {len(recent)} entries): Avg rating: {recent['Overall Rating'].mean():.1f}/5.")
             if "Highlights" in recent.columns:
-                highlights = recent["Highlights"].dropna().head(5).tolist()
-                if highlights:
-                    context_parts.append(f"Highlights: {'; '.join(highlights)}.")
+                hl = recent["Highlights"].dropna().head(5).tolist()
+                if hl:
+                    context_parts.append(f"Highlights: {'; '.join(str(h) for h in hl)}.")
             if "Low Lights" in recent.columns:
-                lowlights = recent["Low Lights"].dropna().head(5).tolist()
-                if lowlights:
-                    context_parts.append(f"Issues: {'; '.join(lowlights)}.")
+                ll = recent["Low Lights"].dropna().head(5).tolist()
+                if ll:
+                    context_parts.append(f"Issues: {'; '.join(str(l) for l in ll)}.")
 
-    if not food_df.empty and "Food Projected for the Day" in food_df.columns and "Feedback Date" not in food_df.columns:
-        week_ago = today - timedelta(days=7)
-        if "Date" in food_df.columns:
-            recent_proj = food_df[food_df["Date"] >= week_ago]
-            if not recent_proj.empty:
-                avg_p = recent_proj["Food Projected for the Day"].mean()
-                avg_a = recent_proj.get("Actual Consumption", pd.Series([0])).mean()
-                context_parts.append(f"Meal projections (7-day avg): Projected={avg_p:.0f}, Actual={avg_a:.0f}.")
+    if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns:
+        recent_proj = food_df[food_df["Date"] >= today - timedelta(days=7)]
+        if not recent_proj.empty:
+            avg_p = recent_proj["Food Projected for the Day"].mean()
+            avg_a = recent_proj.get("Actual Consumption", pd.Series([0])).mean()
+            context_parts.append(f"Meal projections (7-day avg): Projected={avg_p:.0f}, Actual={avg_a:.0f}.")
 
     context = " ".join(context_parts) if context_parts else "No historical data available yet."
 
@@ -355,12 +278,8 @@ def page_ai_assistant():
             prompt = (
                 "You are GWSCafeteria AI, an intelligent assistant for food service quality management "
                 "at the F5 Networks Hyderabad office (8th and 9th floors). "
-                "The system tracks: food availability at 4 check times daily (12:30, 13:00, 13:30, 14:30), "
-                "meal projections vs actual consumption, and employee feedback ratings on "
-                "Portioning, Taste, Texture, Presentation, and Aroma (1-5 scale). "
                 f"Current data context: {context} "
-                "Answer the user's question clearly and provide actionable recommendations. "
-                "Keep your response under 200 words. "
+                "Answer clearly with actionable recommendations. Keep under 200 words. "
                 f"Question: {question}"
             )
             response = ai_complete(prompt)
@@ -373,57 +292,42 @@ def page_ai_assistant():
     - Waste reduction recommendations
     - Floor-level comparison of satisfaction
     - Vendor performance insights
-    - Peak time availability issues
 
     *Powered by OpenAI GPT-4o-mini*
     """)
 
 
-# --- Page: Settings ---
-def page_settings():
-    st.markdown('<div class="main-header">Settings & Data Sources</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Configure Microsoft Forms data connections</div>', unsafe_allow_html=True)
+# --- Page: Data Status ---
+def page_data_status():
+    st.markdown('<div class="main-header">Data Status</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Live connection to Google Sheets (auto-synced from Microsoft Forms)</div>', unsafe_allow_html=True)
 
-    st.markdown("**Current data source URLs:**")
-    st.code(f"Food Tracker: {FOOD_TRACKER_EXCEL_URL or '(not configured)'}", language=None)
-    st.code(f"Meal Feedback: {MEAL_FEEDBACK_EXCEL_URL or '(not configured)'}", language=None)
+    food_url = st.secrets.get("google_sheets", {}).get("food_tracker_url", "")
+    feedback_url = st.secrets.get("google_sheets", {}).get("meal_feedback_url", "")
 
-    st.divider()
-    st.markdown("""
-    **How to get the Excel download link from Microsoft Forms:**
-
-    1. Open your Microsoft Form
-    2. Go to the **Responses** tab
-    3. Click **"Open in Excel"** — this creates/opens an Excel file on OneDrive
-    4. In OneDrive, right-click the Excel file → **Share** → **Copy link**
-    5. Change the URL to a direct download link:
-       - Replace `edit` with `download` at the end
-       - Or use: `https://your-org.sharepoint.com/.../:x:/r/...?download=1`
-    6. Add the URL to `.streamlit/secrets.toml`:
-       ```toml
-       [forms]
-       food_tracker_url = "https://..."
-       meal_feedback_url = "https://..."
-       ```
-
-    **Data refreshes every 5 minutes** (cached with `@st.cache_data(ttl=300)`).
-    """)
+    st.markdown(f"**Food Tracker Sheet:** {'✅ Connected' if food_url else '❌ Not configured'}")
+    st.markdown(f"**Meal Feedback Sheet:** {'✅ Connected' if feedback_url else '❌ Not configured'}")
+    st.caption("Data refreshes every 5 minutes automatically.")
 
     st.divider()
-    st.markdown("**Test data loading:**")
-    if st.button("Reload Food Tracker Data"):
+
+    if st.button("Refresh Food Tracker Now"):
         st.cache_data.clear()
         df = load_food_tracker()
-        st.success(f"Loaded {len(df)} rows") if not df.empty else st.warning("No data loaded")
         if not df.empty:
+            st.success(f"Loaded {len(df)} rows")
             st.dataframe(df.head(10), use_container_width=True)
+        else:
+            st.warning("No data loaded")
 
-    if st.button("Reload Meal Feedback Data"):
+    if st.button("Refresh Meal Feedback Now"):
         st.cache_data.clear()
         df = load_meal_feedback()
-        st.success(f"Loaded {len(df)} rows") if not df.empty else st.warning("No data loaded")
         if not df.empty:
+            st.success(f"Loaded {len(df)} rows")
             st.dataframe(df.head(10), use_container_width=True)
+        else:
+            st.warning("No data loaded")
 
 
 # --- Main ---
@@ -435,11 +339,7 @@ def main():
     st.sidebar.markdown("F5 Hyderabad | Floors 8 & 9")
     st.sidebar.divider()
 
-    page = st.sidebar.radio(
-        "Navigation",
-        ["Dashboard", "Analytics", "AI Assistant", "Settings"],
-        label_visibility="collapsed"
-    )
+    page = st.sidebar.radio("Navigation", ["Dashboard", "Analytics", "AI Assistant", "Data Status"], label_visibility="collapsed")
 
     if page == "Dashboard":
         page_dashboard()
@@ -447,18 +347,15 @@ def main():
         page_analytics()
     elif page == "AI Assistant":
         page_ai_assistant()
-    elif page == "Settings":
-        page_settings()
+    elif page == "Data Status":
+        page_data_status()
 
     st.sidebar.divider()
-
-    # Direct links to Microsoft Forms for data entry
     st.sidebar.markdown("**Submit Data:**")
     st.sidebar.markdown("[📋 Food Availability Tracker](https://forms.cloud.microsoft/Pages/DesignPageV2.aspx?origin=NeoPortalPage&subpage=design&collectionid=soiwjuemwwsot5ngpv98cq&id=L_093Ttq0UCb4L-DJ9gcUP0u1_vQu9ROniTDubCBSUJUNERQMVdTNlMyUklWQTFIVzA0SEpIQ1kyNC4u)")
     st.sidebar.markdown("[⭐ Meal Feedback Form](https://forms.cloud.microsoft/Pages/DesignPageV2.aspx?origin=NeoPortalPage&subpage=design&collectionid=soiwjuemwwsot5ngpv98cq&id=L_093Ttq0UCb4L-DJ9gcUP0u1_vQu9ROniTDubCBSUJUQjFXRUlaUkVDU1NMMzlVQVlQRVhRNUlIVS4u)")
-
     st.sidebar.divider()
-    st.sidebar.caption("GWSCafeteria v0.1 (Forms Edition)")
+    st.sidebar.caption("GWSCafeteria v0.3")
 
 
 if __name__ == "__main__":
