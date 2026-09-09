@@ -12,12 +12,21 @@ FOOD_ITEMS = [
     "Dal", "Steamed Rice", "Flavoured Rice", "Curd", "Dessert",
     "Refreshment/Juice"
 ]
-CHECK_TIMES = ["12:30", "13:00", "13:30", "14:30"]
 FEEDBACK_CRITERIA = ["Portioning", "Taste", "Texture", "Presentation", "Aroma"]
 FLOORS = ["8th Floor", "9th Floor"]
 
 
-# --- Data Loading from Google Sheets ---
+# --- Column name finder (fuzzy match) ---
+def find_col(df, *candidates):
+    """Find a column by trying multiple name variants."""
+    for c in candidates:
+        for col in df.columns:
+            if col.strip().lower() == c.strip().lower():
+                return col
+    return None
+
+
+# --- Data Loading ---
 @st.cache_data(ttl=300)
 def load_food_tracker():
     url = st.secrets.get("google_sheets", {}).get("food_tracker_url", "")
@@ -26,8 +35,32 @@ def load_food_tracker():
     try:
         df = pd.read_csv(url)
         df.columns = df.columns.str.strip()
-        if "Date" in df.columns:
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
+        date_col = find_col(df, "Date")
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+            if date_col != "Date":
+                df = df.rename(columns={date_col: "Date"})
+        floor_col = find_col(df, "Floor")
+        if floor_col and floor_col != "Floor":
+            df = df.rename(columns={floor_col: "Floor"})
+        check_col = find_col(df, "Check Time", "Check_Time", "CheckTime")
+        if check_col and check_col != "Check Time":
+            df = df.rename(columns={check_col: "Check Time"})
+        proj_col = find_col(df, "Food Projected for the Day", "Food Projected for the day", "Projected")
+        if proj_col and proj_col != "Food Projected for the Day":
+            df = df.rename(columns={proj_col: "Food Projected for the Day"})
+        actual_col = find_col(df, "Actual Consumption", "Actual_Consumption", "Consumption")
+        if actual_col and actual_col != "Actual Consumption":
+            df = df.rename(columns={actual_col: "Actual Consumption"})
+        # Parse "Mark item availability:" multi-select into individual columns
+        avail_col = find_col(df, "Mark item availability:", "Mark item availability", "Item Availability")
+        if avail_col:
+            for item in FOOD_ITEMS:
+                df[item] = df[avail_col].astype(str).str.contains(item, case=False, na=False).map({True: "Yes", False: "No"})
+        # Ensure numeric columns
+        for c in ["Food Projected for the Day", "Actual Consumption"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
         return df
     except Exception as e:
         st.error(f"Error loading Food Tracker: {e}")
@@ -42,8 +75,27 @@ def load_meal_feedback():
     try:
         df = pd.read_csv(url)
         df.columns = df.columns.str.strip()
-        if "Feedback Date" in df.columns:
-            df["Feedback Date"] = pd.to_datetime(df["Feedback Date"], errors="coerce").dt.date
+        date_col = find_col(df, "Feedback Date", "Date", "Feedback_Date")
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+            if date_col != "Feedback Date":
+                df = df.rename(columns={date_col: "Feedback Date"})
+        floor_col = find_col(df, "Floor")
+        if floor_col and floor_col != "Floor":
+            df = df.rename(columns={floor_col: "Floor"})
+        rating_col = find_col(df, "Overall Rating", "Overall_Rating", "Overall")
+        if rating_col and rating_col != "Overall Rating":
+            df = df.rename(columns={rating_col: "Overall Rating"})
+        hl_col = find_col(df, "Highlights", "Highlights (what was good)")
+        if hl_col and hl_col != "Highlights":
+            df = df.rename(columns={hl_col: "Highlights"})
+        ll_col = find_col(df, "Low Lights", "Low lights", "Lowlights", "Low Lights (what needs improvement)")
+        if ll_col and ll_col != "Low Lights":
+            df = df.rename(columns={ll_col: "Low Lights"})
+        for c in FEEDBACK_CRITERIA + ["Overall Rating"]:
+            col = find_col(df, c)
+            if col:
+                df[c] = pd.to_numeric(df[col], errors="coerce")
         return df
     except Exception as e:
         st.error(f"Error loading Meal Feedback: {e}")
@@ -134,7 +186,7 @@ def page_dashboard():
         today_food = food_df[food_df["Date"] == today]
         if not today_food.empty:
             for floor in FLOORS:
-                floor_data = today_food[today_food["Floor"] == floor] if "Floor" in today_food.columns else pd.DataFrame()
+                floor_data = today_food[today_food["Floor"] == floor] if "Floor" in today_food.columns else today_food
                 if not floor_data.empty:
                     st.markdown(f"**{floor}**")
                     display_rows = []
@@ -156,11 +208,15 @@ def page_dashboard():
     if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns and "Actual Consumption" in food_df.columns:
         cutoff = today - timedelta(days=14)
         trend = food_df[food_df["Date"] >= cutoff].copy()
-        if not trend.empty and "Floor" in trend.columns:
-            trend_agg = trend.groupby(["Date", "Floor"]).agg(Projected=("Food Projected for the Day", "sum"), Actual=("Actual Consumption", "sum")).reset_index()
+        if not trend.empty:
+            group_cols = ["Date", "Floor"] if "Floor" in trend.columns else ["Date"]
+            trend_agg = trend.groupby(group_cols).agg(Projected=("Food Projected for the Day", "sum"), Actual=("Actual Consumption", "sum")).reset_index()
             if not trend_agg.empty:
-                melted = trend_agg.melt(id_vars=["Date", "Floor"], value_vars=["Projected", "Actual"], var_name="Type", value_name="Meal Count")
-                chart = alt.Chart(melted).mark_line(point=True).encode(x=alt.X("Date:T"), y="Meal Count:Q", color="Floor:N", strokeDash="Type:N").properties(height=350)
+                melted = trend_agg.melt(id_vars=group_cols, value_vars=["Projected", "Actual"], var_name="Type", value_name="Meal Count")
+                color_enc = "Floor:N" if "Floor" in group_cols else alt.value("#0891B2")
+                chart = alt.Chart(melted).mark_line(point=True).encode(
+                    x=alt.X("Date:T"), y="Meal Count:Q", color=color_enc, strokeDash="Type:N"
+                ).properties(height=350)
                 st.altair_chart(chart, use_container_width=True)
     else:
         st.info("No projection data available yet.")
@@ -180,20 +236,24 @@ def page_analytics():
     with tab1:
         if not feedback_df.empty and "Feedback Date" in feedback_df.columns and "Overall Rating" in feedback_df.columns:
             recent = feedback_df[feedback_df["Feedback Date"] >= today - timedelta(days=30)].copy()
-            if not recent.empty and "Floor" in recent.columns:
-                daily = recent.groupby(["Feedback Date", "Floor"]).agg(Overall=("Overall Rating", "mean")).reset_index()
+            if not recent.empty:
+                group_cols = ["Feedback Date", "Floor"] if "Floor" in recent.columns else ["Feedback Date"]
+                daily = recent.groupby(group_cols).agg(Overall=("Overall Rating", "mean")).reset_index()
                 target_line = alt.Chart(pd.DataFrame({"y": [3]})).mark_rule(strokeDash=[5, 5], color="orange").encode(y="y:Q")
+                color_enc = "Floor:N" if "Floor" in group_cols else alt.value("#0891B2")
                 line_chart = alt.Chart(daily).mark_line(point=True).encode(
-                    x=alt.X("Feedback Date:T"), y=alt.Y("Overall:Q", title="Overall Rating"), color="Floor:N"
+                    x=alt.X("Feedback Date:T"), y=alt.Y("Overall:Q", title="Overall Rating"), color=color_enc
                 ).properties(height=350, title="Overall Rating Trend (Last 30 Days)")
                 st.altair_chart(line_chart + target_line, use_container_width=True)
 
-                avg_vals = recent[FEEDBACK_CRITERIA].mean()
-                criteria_df = pd.DataFrame({"Criteria": FEEDBACK_CRITERIA, "Score": avg_vals.values})
-                criteria_chart = alt.Chart(criteria_df).mark_bar(color="#0891B2", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
-                    x=alt.X("Criteria:N", sort=FEEDBACK_CRITERIA), y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 5]))
-                ).properties(height=350, title="Average Criteria Scores")
-                st.altair_chart(criteria_chart, use_container_width=True)
+                available_criteria = [c for c in FEEDBACK_CRITERIA if c in recent.columns]
+                if available_criteria:
+                    avg_vals = recent[available_criteria].mean()
+                    criteria_df = pd.DataFrame({"Criteria": available_criteria, "Score": avg_vals.values})
+                    criteria_chart = alt.Chart(criteria_df).mark_bar(color="#0891B2", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+                        x=alt.X("Criteria:N", sort=available_criteria), y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 5]))
+                    ).properties(height=350, title="Average Criteria Scores")
+                    st.altair_chart(criteria_chart, use_container_width=True)
             else:
                 st.info("No feedback data available yet.")
         else:
@@ -218,6 +278,8 @@ def page_analytics():
                         color=alt.Color("Availability %:Q", scale=alt.Scale(domain=[0, 50, 100], range=["#EF4444", "#F59E0B", "#10B981"]), legend=None)
                     ).properties(height=400, title="Item Availability Rate (Last 14 Days)")
                     st.altair_chart(fig, use_container_width=True)
+                else:
+                    st.info("No food item columns found in data.")
         else:
             st.info("No availability data yet.")
 
@@ -315,7 +377,7 @@ def page_data_status():
         st.cache_data.clear()
         df = load_food_tracker()
         if not df.empty:
-            st.success(f"Loaded {len(df)} rows")
+            st.success(f"Loaded {len(df)} rows | Columns: {', '.join(df.columns.tolist())}")
             st.dataframe(df.head(10), use_container_width=True)
         else:
             st.warning("No data loaded")
@@ -324,7 +386,7 @@ def page_data_status():
         st.cache_data.clear()
         df = load_meal_feedback()
         if not df.empty:
-            st.success(f"Loaded {len(df)} rows")
+            st.success(f"Loaded {len(df)} rows | Columns: {', '.join(df.columns.tolist())}")
             st.dataframe(df.head(10), use_container_width=True)
         else:
             st.warning("No data loaded")
