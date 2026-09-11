@@ -144,22 +144,32 @@ def page_dashboard():
     feedback_df = load_meal_feedback()
     today = date.today()
 
-    # Debug: show what dates are in the data
-    if not food_df.empty and "Date" in food_df.columns:
-        latest_date = food_df["Date"].max()
-        # Use latest date if no data for today
-        display_date = today if today in food_df["Date"].values else latest_date
-    else:
-        display_date = today
-        latest_date = None
+    # --- Filters ---
+    filter_col1, filter_col2 = st.columns(2)
+    with filter_col1:
+        available_dates = sorted(food_df["Date"].dropna().unique().tolist(), reverse=True) if not food_df.empty and "Date" in food_df.columns else [today]
+        default_idx = 0 if today in available_dates else 0
+        display_date = st.selectbox("Select Date", available_dates, index=default_idx, key="dash_date")
+    with filter_col2:
+        all_floors = food_df["Floor"].dropna().unique().tolist() if not food_df.empty and "Floor" in food_df.columns else []
+        floor_options = ["All Floors"] + sorted(all_floors)
+        selected_floor = st.selectbox("Select Floor", floor_options, key="dash_floor")
+
+    st.markdown("---")
+
+    # Apply filters
+    filtered_food = food_df.copy() if not food_df.empty else pd.DataFrame()
+    if not filtered_food.empty and "Date" in filtered_food.columns:
+        filtered_food = filtered_food[filtered_food["Date"] == display_date]
+    if not filtered_food.empty and selected_floor != "All Floors" and "Floor" in filtered_food.columns:
+        filtered_food = filtered_food[filtered_food["Floor"] == selected_floor]
 
     col1, col2, col3, col4 = st.columns(4)
 
     avail_pct = 0
-    if not food_df.empty and "Date" in food_df.columns:
-        day_food = food_df[food_df["Date"] == display_date]
+    if not filtered_food.empty:
         total_checks, available_checks = 0, 0
-        for _, row in day_food.iterrows():
+        for _, row in filtered_food.iterrows():
             for item in FOOD_ITEMS:
                 if item in row:
                     total_checks += 1
@@ -168,11 +178,10 @@ def page_dashboard():
         avail_pct = round((available_checks / total_checks) * 100, 1) if total_checks > 0 else 0
 
     projected, actual = 0, 0
-    if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns:
-        day_proj = food_df[food_df["Date"] == display_date]
-        projected = int(day_proj["Food Projected for the Day"].sum()) if not day_proj.empty else 0
-        if "Actual Consumption" in food_df.columns:
-            actual = int(day_proj["Actual Consumption"].sum()) if not day_proj.empty else 0
+    if not filtered_food.empty and "Food Projected for the Day" in filtered_food.columns:
+        projected = int(filtered_food["Food Projected for the Day"].sum())
+        if "Actual Consumption" in filtered_food.columns:
+            actual = int(filtered_food["Actual Consumption"].sum())
 
     avg_r = 0
     if not feedback_df.empty and "Feedback Date" in feedback_df.columns and "Overall Rating" in feedback_df.columns:
@@ -189,33 +198,28 @@ def page_dashboard():
     with col4:
         st.markdown(f'<div class="metric-card"><div class="metric-value">{avg_r}/5</div><div class="metric-label">Avg Rating (7 days)</div></div>', unsafe_allow_html=True)
 
-    if display_date != today and latest_date:
-        st.caption(f"Showing data for {display_date} (latest available). No data for today yet.")
+    if display_date != today:
+        st.caption(f"Showing data for {display_date}. Select today's date if available.")
 
     st.divider()
     st.subheader("Food Availability")
-    if not food_df.empty and "Date" in food_df.columns:
-        day_food = food_df[food_df["Date"] == display_date]
-        if not day_food.empty:
-            # Get actual floor values from data
-            floors_in_data = day_food["Floor"].unique().tolist() if "Floor" in day_food.columns else ["All"]
-            for floor in floors_in_data:
-                floor_data = day_food[day_food["Floor"] == floor] if "Floor" in day_food.columns else day_food
-                if not floor_data.empty:
-                    st.markdown(f"**{floor}**")
-                    display_rows = []
-                    for _, row in floor_data.iterrows():
-                        item_status = {"Check Time": row.get("Check Time", "")}
-                        for item in FOOD_ITEMS:
-                            val = str(row.get(item, "")).strip().lower()
-                            item_status[item] = "✅" if val in ("yes", "true", "1", "available") else "❌" if val else "—"
-                        display_rows.append(item_status)
-                    if display_rows:
-                        st.dataframe(pd.DataFrame(display_rows).set_index("Check Time"), use_container_width=True)
-        else:
-            st.info("No availability data found.")
+    if not filtered_food.empty:
+        floors_in_data = filtered_food["Floor"].unique().tolist() if "Floor" in filtered_food.columns else ["All"]
+        for floor in floors_in_data:
+            floor_data = filtered_food[filtered_food["Floor"] == floor] if "Floor" in filtered_food.columns else filtered_food
+            if not floor_data.empty:
+                st.markdown(f"**{floor}**")
+                display_rows = []
+                for _, row in floor_data.iterrows():
+                    item_status = {"Check Time": row.get("Check Time", "")}
+                    for item in FOOD_ITEMS:
+                        val = str(row.get(item, "")).strip().lower()
+                        item_status[item] = "✅" if val in ("yes", "true", "1", "available") else "❌" if val else "—"
+                    display_rows.append(item_status)
+                if display_rows:
+                    st.dataframe(pd.DataFrame(display_rows).set_index("Check Time"), use_container_width=True)
     else:
-        st.info("No food tracker data available. Check Data Status page.")
+        st.info("No availability data for selected filters.")
 
     # Show raw data summary for debugging
     if not food_df.empty:
