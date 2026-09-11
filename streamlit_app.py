@@ -144,13 +144,22 @@ def page_dashboard():
     feedback_df = load_meal_feedback()
     today = date.today()
 
+    # Debug: show what dates are in the data
+    if not food_df.empty and "Date" in food_df.columns:
+        latest_date = food_df["Date"].max()
+        # Use latest date if no data for today
+        display_date = today if today in food_df["Date"].values else latest_date
+    else:
+        display_date = today
+        latest_date = None
+
     col1, col2, col3, col4 = st.columns(4)
 
     avail_pct = 0
     if not food_df.empty and "Date" in food_df.columns:
-        today_food = food_df[food_df["Date"] == today]
+        day_food = food_df[food_df["Date"] == display_date]
         total_checks, available_checks = 0, 0
-        for _, row in today_food.iterrows():
+        for _, row in day_food.iterrows():
             for item in FOOD_ITEMS:
                 if item in row:
                     total_checks += 1
@@ -160,10 +169,10 @@ def page_dashboard():
 
     projected, actual = 0, 0
     if not food_df.empty and "Date" in food_df.columns and "Food Projected for the Day" in food_df.columns:
-        today_proj = food_df[food_df["Date"] == today]
-        projected = int(today_proj["Food Projected for the Day"].sum()) if not today_proj.empty else 0
+        day_proj = food_df[food_df["Date"] == display_date]
+        projected = int(day_proj["Food Projected for the Day"].sum()) if not day_proj.empty else 0
         if "Actual Consumption" in food_df.columns:
-            actual = int(today_proj["Actual Consumption"].sum()) if not today_proj.empty else 0
+            actual = int(day_proj["Actual Consumption"].sum()) if not day_proj.empty else 0
 
     avg_r = 0
     if not feedback_df.empty and "Feedback Date" in feedback_df.columns and "Overall Rating" in feedback_df.columns:
@@ -172,21 +181,26 @@ def page_dashboard():
             avg_r = round(recent["Overall Rating"].mean(), 1)
 
     with col1:
-        st.markdown(f'<div class="metric-card"><div class="metric-value">{avail_pct}%</div><div class="metric-label">Food Availability Today</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{avail_pct}%</div><div class="metric-label">Food Availability</div></div>', unsafe_allow_html=True)
     with col2:
-        st.markdown(f'<div class="metric-card"><div class="metric-value">{projected}</div><div class="metric-label">Meals Projected Today</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{projected}</div><div class="metric-label">Meals Projected</div></div>', unsafe_allow_html=True)
     with col3:
         st.markdown(f'<div class="metric-card"><div class="metric-value">{actual}</div><div class="metric-label">Actual Consumption</div></div>', unsafe_allow_html=True)
     with col4:
         st.markdown(f'<div class="metric-card"><div class="metric-value">{avg_r}/5</div><div class="metric-label">Avg Rating (7 days)</div></div>', unsafe_allow_html=True)
 
+    if display_date != today and latest_date:
+        st.caption(f"Showing data for {display_date} (latest available). No data for today yet.")
+
     st.divider()
-    st.subheader("Today's Food Availability")
+    st.subheader("Food Availability")
     if not food_df.empty and "Date" in food_df.columns:
-        today_food = food_df[food_df["Date"] == today]
-        if not today_food.empty:
-            for floor in FLOORS:
-                floor_data = today_food[today_food["Floor"] == floor] if "Floor" in today_food.columns else today_food
+        day_food = food_df[food_df["Date"] == display_date]
+        if not day_food.empty:
+            # Get actual floor values from data
+            floors_in_data = day_food["Floor"].unique().tolist() if "Floor" in day_food.columns else ["All"]
+            for floor in floors_in_data:
+                floor_data = day_food[day_food["Floor"] == floor] if "Floor" in day_food.columns else day_food
                 if not floor_data.empty:
                     st.markdown(f"**{floor}**")
                     display_rows = []
@@ -199,9 +213,17 @@ def page_dashboard():
                     if display_rows:
                         st.dataframe(pd.DataFrame(display_rows).set_index("Check Time"), use_container_width=True)
         else:
-            st.info("No availability data recorded yet today.")
+            st.info("No availability data found.")
     else:
-        st.info("No food tracker data available.")
+        st.info("No food tracker data available. Check Data Status page.")
+
+    # Show raw data summary for debugging
+    if not food_df.empty:
+        with st.expander("Raw data preview (for debugging)"):
+            st.caption(f"Total rows: {len(food_df)} | Columns: {', '.join(food_df.columns.tolist())}")
+            st.caption(f"Date values: {sorted(food_df['Date'].dropna().unique().tolist()) if 'Date' in food_df.columns else 'N/A'}")
+            st.caption(f"Floor values: {food_df['Floor'].unique().tolist() if 'Floor' in food_df.columns else 'N/A'}")
+            st.dataframe(food_df.tail(5), use_container_width=True)
 
     st.divider()
     st.subheader("Projection vs Consumption (Last 14 Days)")
