@@ -135,7 +135,7 @@ def ai_complete(prompt):
         if not api_key:
             return "Gemini API key not configured. Add it to Streamlit secrets under [gemini] api_key."
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
