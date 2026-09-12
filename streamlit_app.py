@@ -416,7 +416,7 @@ def page_analytics():
             recent_proj = food_df[food_df["Date"] >= today - timedelta(days=14)].copy()
             if not recent_proj.empty:
                 recent_proj["Waste"] = recent_proj["Food Projected for the Day"] - recent_proj["Actual Consumption"]
-                recent_proj["Waste %"] = (recent_proj["Waste"] / recent_proj["Food Projected for the Day"].replace(0, pd.NA) * 100).round(1)
+                recent_proj["Waste %"] = (recent_proj["Waste"] / recent_proj["Food Projected for the Day"].replace(0, pd.NA) * 100).fillna(0).round(1)
                 if "Floor" in recent_proj.columns:
                     zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="black").encode(y="y:Q")
                     waste_chart = alt.Chart(recent_proj).mark_bar().encode(
