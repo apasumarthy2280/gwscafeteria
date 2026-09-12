@@ -163,7 +163,7 @@ def ai_complete(prompt):
         url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 500, "temperature": 0.7}
+            "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.7}
         }
         resp = http_requests.post(url, json=payload, timeout=30)
         if resp.status_code == 200:
