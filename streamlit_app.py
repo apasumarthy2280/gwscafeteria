@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import date, timedelta
-from openai import OpenAI
+import google.generativeai as genai
 
 # --- Config ---
 FOOD_ITEMS = [
@@ -131,16 +131,13 @@ def load_meal_feedback():
 
 def ai_complete(prompt):
     try:
-        api_key = st.secrets.get("openai", {}).get("api_key", "")
+        api_key = st.secrets.get("gemini", {}).get("api_key", "")
         if not api_key:
-            return "OpenAI API key not configured."
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500, temperature=0.7,
-        )
-        return response.choices[0].message.content
+            return "Gemini API key not configured. Add it to Streamlit secrets under [gemini] api_key."
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        response = model.generate_content(prompt)
+        return response.text
     except Exception as e:
         return f"AI unavailable: {str(e)}"
 
@@ -266,10 +263,14 @@ def page_dashboard():
             trend_agg = trend.groupby(group_cols).agg(Projected=("Food Projected for the Day", "sum"), Actual=("Actual Consumption", "sum")).reset_index()
             if not trend_agg.empty:
                 melted = trend_agg.melt(id_vars=group_cols, value_vars=["Projected", "Actual"], var_name="Type", value_name="Meal Count")
-                color_enc = "Floor:N" if "Floor" in group_cols else alt.value("#0891B2")
-                chart = alt.Chart(melted).mark_line(point=True).encode(
-                    x=alt.X("Date:T"), y="Meal Count:Q", color=color_enc, strokeDash="Type:N"
-                ).properties(height=350)
+                if "Floor" in group_cols:
+                    chart = alt.Chart(melted).mark_line(point=True).encode(
+                        x=alt.X("Date:T"), y="Meal Count:Q", color="Floor:N", strokeDash="Type:N"
+                    ).properties(height=350)
+                else:
+                    chart = alt.Chart(melted).mark_line(point=True).encode(
+                        x=alt.X("Date:T"), y="Meal Count:Q", strokeDash="Type:N"
+                    ).properties(height=350)
                 st.altair_chart(chart, use_container_width=True)
     else:
         st.info("No projection data available yet.")
@@ -363,10 +364,14 @@ def page_analytics():
                 group_cols = ["Feedback Date", "Floor"] if "Floor" in recent.columns else ["Feedback Date"]
                 daily = recent.groupby(group_cols).agg(Overall=("Overall Rating", "mean")).reset_index()
                 target_line = alt.Chart(pd.DataFrame({"y": [3]})).mark_rule(strokeDash=[5, 5], color="orange").encode(y="y:Q")
-                color_enc = "Floor:N" if "Floor" in group_cols else alt.value("#0891B2")
-                line_chart = alt.Chart(daily).mark_line(point=True).encode(
-                    x=alt.X("Feedback Date:T"), y=alt.Y("Overall:Q", title="Overall Rating"), color=color_enc
-                ).properties(height=350, title="Overall Rating Trend (Last 30 Days)")
+                if "Floor" in group_cols:
+                    line_chart = alt.Chart(daily).mark_line(point=True).encode(
+                        x=alt.X("Feedback Date:T"), y=alt.Y("Overall:Q", title="Overall Rating"), color="Floor:N"
+                    ).properties(height=350, title="Overall Rating Trend (Last 30 Days)")
+                else:
+                    line_chart = alt.Chart(daily).mark_line(point=True, color="#0891B2").encode(
+                        x=alt.X("Feedback Date:T"), y=alt.Y("Overall:Q", title="Overall Rating")
+                    ).properties(height=350, title="Overall Rating Trend (Last 30 Days)")
                 st.altair_chart(line_chart + target_line, use_container_width=True)
 
                 available_criteria = [c for c in FEEDBACK_CRITERIA if c in recent.columns]
@@ -478,7 +483,7 @@ def page_ai_assistant():
     - Floor-level comparison of satisfaction
     - Vendor performance insights
 
-    *Powered by OpenAI GPT-4o-mini*
+    *Powered by Google Gemini*
     """)
 
 
