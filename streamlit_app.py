@@ -5,6 +5,7 @@ import pandas as pd
 import altair as alt
 from datetime import date, timedelta
 import google.generativeai as genai
+import requests as http_requests
 
 # --- Config ---
 FOOD_ITEMS = [
@@ -134,10 +135,18 @@ def ai_complete(prompt):
         api_key = st.secrets.get("gemini", {}).get("api_key", "")
         if not api_key:
             return "Gemini API key not configured. Add it to Streamlit secrets under [gemini] api_key."
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
-        return response.text
+        # Use REST API directly for maximum compatibility
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": 500, "temperature": 0.7}
+        }
+        resp = http_requests.post(url, json=payload, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            return f"AI error (HTTP {resp.status_code}): {resp.text[:200]}"
     except Exception as e:
         return f"AI unavailable: {str(e)}"
 
