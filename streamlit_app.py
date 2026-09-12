@@ -33,7 +33,7 @@ def load_food_tracker():
     if not url:
         return pd.DataFrame()
     try:
-        df = pd.read_csv(url)
+        df = pd.read_csv(url, on_bad_lines="skip")
         df.columns = df.columns.str.strip()
         date_col = find_col(df, "Date")
         if date_col:
@@ -73,7 +73,7 @@ def load_meal_feedback():
     if not url:
         return pd.DataFrame()
     try:
-        df = pd.read_csv(url)
+        df = pd.read_csv(url, on_bad_lines="skip")
         df.columns = df.columns.str.strip()
         date_col = find_col(df, "Feedback Date", "Date", "Feedback_Date")
         if date_col:
