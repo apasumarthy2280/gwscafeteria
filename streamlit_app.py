@@ -247,6 +247,76 @@ def page_dashboard():
     else:
         st.info("No projection data available yet.")
 
+    # --- Recent Meal Feedback ---
+    st.divider()
+    st.subheader("Recent Meal Feedback")
+    if not feedback_df.empty and "Feedback Date" in feedback_df.columns:
+        fb_filter1, fb_filter2 = st.columns(2)
+        with fb_filter1:
+            fb_dates = sorted(feedback_df["Feedback Date"].dropna().unique().tolist(), reverse=True)
+            fb_date_options = ["All Dates"] + [str(d) for d in fb_dates]
+            fb_date_sel = st.selectbox("Filter by Date", fb_date_options, key="fb_date_filter")
+        with fb_filter2:
+            fb_floors = feedback_df["Floor"].dropna().unique().tolist() if "Floor" in feedback_df.columns else []
+            fb_floor_options = ["All Floors"] + sorted(fb_floors)
+            fb_floor_sel = st.selectbox("Filter by Floor", fb_floor_options, key="fb_floor_filter")
+
+        filtered_fb = feedback_df.copy()
+        if fb_date_sel != "All Dates":
+            filtered_fb = filtered_fb[filtered_fb["Feedback Date"].astype(str) == fb_date_sel]
+        if fb_floor_sel != "All Floors" and "Floor" in filtered_fb.columns:
+            filtered_fb = filtered_fb[filtered_fb["Floor"] == fb_floor_sel]
+
+        if not filtered_fb.empty:
+            # Summary metrics
+            fb_m1, fb_m2, fb_m3 = st.columns(3)
+            avg_overall = filtered_fb["Overall Rating"].mean() if "Overall Rating" in filtered_fb.columns else 0
+            total_responses = len(filtered_fb)
+            low_rated = len(filtered_fb[filtered_fb["Overall Rating"] <= 2]) if "Overall Rating" in filtered_fb.columns else 0
+
+            r_color = "#EF4444" if avg_overall < 2.5 else "#F59E0B" if avg_overall < 3.5 else "#10B981"
+            with fb_m1:
+                st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:{r_color}">{avg_overall:.1f}/5</div><div class="metric-label">Avg Rating</div></div>', unsafe_allow_html=True)
+            with fb_m2:
+                st.markdown(f'<div class="metric-card"><div class="metric-value">{total_responses}</div><div class="metric-label">Total Responses</div></div>', unsafe_allow_html=True)
+            with fb_m3:
+                st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:#EF4444">{low_rated}</div><div class="metric-label">Low Ratings (1-2)</div></div>', unsafe_allow_html=True)
+
+            # Feedback cards
+            RATING_COLORS = {5: "#166534", 4: "#4ADE80", 3: "#F97316", 2: "#FACC15", 1: "#EF4444"}
+            RATING_LABELS = {5: "Excellent", 4: "Good", 3: "Okay", 2: "Fair", 1: "Very Bad"}
+
+            for _, fb in filtered_fb.iterrows():
+                rating_val = int(fb.get("Overall Rating", 3)) if pd.notna(fb.get("Overall Rating")) else 3
+                rating_val = max(1, min(5, rating_val))
+                color = RATING_COLORS.get(rating_val, "#F97316")
+                label = RATING_LABELS.get(rating_val, "")
+                floor_txt = fb.get("Floor", "")
+                fb_date_txt = fb.get("Feedback Date", "")
+                highlights = fb.get("Highlights", "")
+                lowlights = fb.get("Low Lights", "")
+                emp_name = fb.get("Employee Name", "Anonymous")
+
+                comment_parts = []
+                if pd.notna(highlights) and str(highlights).strip():
+                    comment_parts.append(f"<b>Highlights:</b> {highlights}")
+                if pd.notna(lowlights) and str(lowlights).strip():
+                    comment_parts.append(f"<b>Issues:</b> {lowlights}")
+                comment_html = "<br>".join(comment_parts) if comment_parts else "<i>No comments</i>"
+
+                st.markdown(f"""
+                <div style="border-left:4px solid {color}; background:#FAFAFA; border-radius:8px; padding:12px; margin:6px 0;">
+                    <b>{emp_name}</b> &nbsp;
+                    <span style="background:{color}; color:#fff; padding:2px 8px; border-radius:12px; font-size:0.8rem;">{rating_val}/5 - {label}</span>
+                    <span style="color:#6B7280; font-size:0.8rem;"> &nbsp; {floor_txt} &nbsp; {fb_date_txt}</span><br>
+                    <span style="color:#374151; font-size:0.9rem;">{comment_html}</span>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("No feedback data for selected filters.")
+    else:
+        st.info("No meal feedback data available yet.")
+
 
 # --- Page: Analytics ---
 def page_analytics():
