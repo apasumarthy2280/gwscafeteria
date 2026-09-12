@@ -137,9 +137,9 @@ def ai_complete(prompt):
             return "Gemini API key not configured. Add it to Streamlit secrets under [gemini] api_key."
         # Try v1 endpoint first, then v1beta
         endpoints = [
-            f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
-            f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
         ]
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
