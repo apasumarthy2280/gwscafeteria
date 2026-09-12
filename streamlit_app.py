@@ -135,24 +135,34 @@ def ai_complete(prompt):
         api_key = st.secrets.get("gemini", {}).get("api_key", "")
         if not api_key:
             return "Gemini API key not configured. Add it to Streamlit secrets under [gemini] api_key."
-        # Try v1 endpoint first, then v1beta
-        endpoints = [
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api_key}",
-        ]
+        # First, list available models to find one that works
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_resp = http_requests.get(list_url, timeout=15)
+        if list_resp.status_code == 200:
+            models = list_resp.json().get("models", [])
+            # Find a model that supports generateContent
+            model_name = None
+            for m in models:
+                if "generateContent" in m.get("supportedGenerationMethods", []):
+                    model_name = m["name"]
+                    break
+            if not model_name:
+                return f"No generative models available. Found {len(models)} models: {[m['name'] for m in models[:5]]}"
+        else:
+            return f"AI error listing models (HTTP {list_resp.status_code}): {list_resp.text[:200]}"
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": 500, "temperature": 0.7}
         }
-        for url in endpoints:
-            resp = http_requests.post(url, json=payload, timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-        # All endpoints failed — show the last error
-        error_detail = resp.json().get("error", {}).get("message", resp.text[:300])
-        return f"AI error: {error_detail}"
+        resp = http_requests.post(url, json=payload, timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            error_detail = resp.json().get("error", {}).get("message", resp.text[:300])
+            return f"AI error with {model_name}: {error_detail}"
     except Exception as e:
         return f"AI unavailable: {str(e)}"
 
