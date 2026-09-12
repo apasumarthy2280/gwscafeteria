@@ -140,12 +140,21 @@ def ai_complete(prompt):
         list_resp = http_requests.get(list_url, timeout=15)
         if list_resp.status_code == 200:
             models = list_resp.json().get("models", [])
-            # Find a model that supports generateContent
+            # Find a model that supports generateContent, prefer gemini-3.6-flash
             model_name = None
-            for m in models:
-                if "generateContent" in m.get("supportedGenerationMethods", []):
-                    model_name = m["name"]
+            preferred = ["models/gemini-3.6-flash", "models/gemini-2.5-pro", "models/gemini-2.0-flash"]
+            for pref in preferred:
+                for m in models:
+                    if m["name"] == pref and "generateContent" in m.get("supportedGenerationMethods", []):
+                        model_name = pref
+                        break
+                if model_name:
                     break
+            if not model_name:
+                for m in models:
+                    if "generateContent" in m.get("supportedGenerationMethods", []):
+                        model_name = m["name"]
+                        break
             if not model_name:
                 return f"No generative models available. Found {len(models)} models: {[m['name'] for m in models[:5]]}"
         else:
