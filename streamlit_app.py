@@ -75,27 +75,54 @@ def load_meal_feedback():
     try:
         df = pd.read_csv(url, on_bad_lines="skip")
         df.columns = df.columns.str.strip()
-        date_col = find_col(df, "Feedback Date", "Date", "Feedback_Date")
+
+        # Date: use Start time or Completion time if Feedback Date not present
+        date_col = find_col(df, "Feedback Date", "Date", "Start time", "Completion time")
         if date_col:
-            df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
-            if date_col != "Feedback Date":
-                df = df.rename(columns={date_col: "Feedback Date"})
+            df["Feedback Date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+
+        # Floor
         floor_col = find_col(df, "Floor")
         if floor_col and floor_col != "Floor":
             df = df.rename(columns={floor_col: "Floor"})
-        rating_col = find_col(df, "Overall Rating", "Overall_Rating", "Overall")
-        if rating_col and rating_col != "Overall Rating":
-            df = df.rename(columns={rating_col: "Overall Rating"})
+
+        # Employee Name
+        name_col = find_col(df, "Employee Name", "Name")
+        if name_col and name_col != "Employee Name":
+            df["Employee Name"] = df[name_col]
+
+        # Ratings: map long question names to short criteria names
+        rating_mappings = {
+            "Portioning": ["Portioning", "How would you rate the food portioning", "portioning"],
+            "Taste": ["Taste", "How would you rate the taste", "taste"],
+            "Texture": ["Texture", "How would you rate the texture", "texture"],
+            "Presentation": ["Presentation", "How would you rate the presentation", "presentation"],
+            "Aroma": ["Aroma", "How would you rate the aroma", "aroma"],
+            "Overall Rating": ["Overall Rating", "Overall_Rating", "Overall"],
+        }
+        for short_name, candidates in rating_mappings.items():
+            matched = None
+            for cand in candidates:
+                for col in df.columns:
+                    if cand.lower() in col.lower():
+                        matched = col
+                        break
+                if matched:
+                    break
+            if matched:
+                df[short_name] = pd.to_numeric(df[matched], errors="coerce")
+
+        # Highlights / Low Lights
         hl_col = find_col(df, "Highlights", "Highlights (what was good)")
         if hl_col and hl_col != "Highlights":
-            df = df.rename(columns={hl_col: "Highlights"})
+            df["Highlights"] = df[hl_col]
         ll_col = find_col(df, "Low Lights", "Low lights", "Lowlights", "Low Lights (what needs improvement)")
         if ll_col and ll_col != "Low Lights":
-            df = df.rename(columns={ll_col: "Low Lights"})
-        for c in FEEDBACK_CRITERIA + ["Overall Rating"]:
-            col = find_col(df, c)
-            if col:
-                df[c] = pd.to_numeric(df[col], errors="coerce")
+            df["Low Lights"] = df[ll_col]
+        ca_col = find_col(df, "Corrective Action", "Corrective Action Required")
+        if ca_col and ca_col != "Corrective Action":
+            df["Corrective Action"] = df[ca_col]
+
         return df
     except Exception as e:
         st.error(f"Error loading Meal Feedback: {e}")
