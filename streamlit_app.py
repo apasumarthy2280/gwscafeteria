@@ -135,18 +135,24 @@ def ai_complete(prompt):
         api_key = st.secrets.get("gemini", {}).get("api_key", "")
         if not api_key:
             return "Gemini API key not configured. Add it to Streamlit secrets under [gemini] api_key."
-        # Use REST API directly for maximum compatibility
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+        # Try v1 endpoint first, then v1beta
+        endpoints = [
+            f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+            f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}",
+        ]
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"maxOutputTokens": 500, "temperature": 0.7}
         }
-        resp = http_requests.post(url, json=payload, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            return f"AI error (HTTP {resp.status_code}): {resp.text[:200]}"
+        for url in endpoints:
+            resp = http_requests.post(url, json=payload, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        # All endpoints failed — show the last error
+        error_detail = resp.json().get("error", {}).get("message", resp.text[:300])
+        return f"AI error: {error_detail}"
     except Exception as e:
         return f"AI unavailable: {str(e)}"
 
