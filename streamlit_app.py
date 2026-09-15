@@ -4,7 +4,6 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from datetime import date, timedelta
-import google.generativeai as genai
 import requests as http_requests
 
 # --- Config ---
