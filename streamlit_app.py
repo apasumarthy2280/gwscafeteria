@@ -14,6 +14,11 @@ FOOD_ITEMS = [
     "Refreshment/Juice"
 ]
 FEEDBACK_CRITERIA = ["Portioning", "Taste", "Texture", "Presentation", "Aroma"]
+MEAL_ITEMS_RATED = [
+    "Salad", "Wet Veg", "Rasam / Sambar", "Dal", "Steamed Rice",
+    "Flavoured Rice", "Curd", "Dessert", "Rotis", "Pickle",
+    "Non- Veg", "Dry Veg", "Refreshment/Juice"
+]
 FLOORS = ["8th Floor", "9th Floor"]
 
 
@@ -110,8 +115,8 @@ def load_meal_feedback():
     try:
         df = read_gsheet_csv(url)
 
-        # Date: use Start time or Completion time if Feedback Date not present
-        date_col = find_col(df, "Feedback Date", "Date", "Start time", "Completion time")
+        # Date
+        date_col = find_col(df, "Date", "Feedback Date", "Start time", "Completion time")
         if date_col:
             df["Feedback Date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
 
@@ -120,42 +125,44 @@ def load_meal_feedback():
         if floor_col and floor_col != "Floor":
             df = df.rename(columns={floor_col: "Floor"})
 
-        # Employee Name
+        # Employee Name & ID
         name_col = find_col(df, "Employee Name", "Name")
         if name_col and name_col != "Employee Name":
             df["Employee Name"] = df[name_col]
+        id_col = find_col(df, "Employee Id", "Employee ID")
+        if id_col and id_col != "Employee ID":
+            df["Employee ID"] = df[id_col]
 
-        # Ratings: map long question names to short criteria names
-        rating_mappings = {
-            "Portioning": ["Portioning", "How would you rate the food portioning", "portioning"],
-            "Taste": ["Taste", "How would you rate the taste", "taste"],
-            "Texture": ["Texture", "How would you rate the texture", "texture"],
-            "Presentation": ["Presentation", "How would you rate the presentation", "presentation"],
-            "Aroma": ["Aroma", "How would you rate the aroma", "aroma"],
-            "Overall Rating": ["Overall Rating", "Overall_Rating", "Overall"],
-        }
-        for short_name, candidates in rating_mappings.items():
-            matched = None
-            for cand in candidates:
-                for col in df.columns:
-                    if cand.lower() in col.lower():
-                        matched = col
-                        break
-                if matched:
+        # Per-item ratings: extract from columns like "Salad (Rate on basis of...)"
+        for item in MEAL_ITEMS_RATED:
+            for col in df.columns:
+                if col.lower().startswith(item.lower()) and "rate" in col.lower():
+                    df[item] = pd.to_numeric(df[col], errors="coerce")
                     break
-            if matched:
-                df[short_name] = pd.to_numeric(df[matched], errors="coerce")
 
-        # Highlights / Low Lights
-        hl_col = find_col(df, "Highlights", "Highlights (what was good)")
+        # Overall Rating
+        overall_col = find_col(df, "Overall Rating", "Overall_Rating", "Overall")
+        if overall_col:
+            df["Overall Rating"] = pd.to_numeric(df[overall_col], errors="coerce")
+
+        # Compute average item rating per row
+        item_cols_present = [i for i in MEAL_ITEMS_RATED if i in df.columns]
+        if item_cols_present:
+            df["Avg Item Rating"] = df[item_cols_present].mean(axis=1).round(1)
+
+        # Highlights / Low Lights / Corrective Action / Remarks
+        hl_col = find_col(df, "Highlights (what was good)1", "Highlights (what was good)", "Highlights")
         if hl_col and hl_col != "Highlights":
             df["Highlights"] = df[hl_col]
-        ll_col = find_col(df, "Low Lights", "Low lights", "Lowlights", "Low Lights (what needs improvement)")
+        ll_col = find_col(df, "Low Lights (what needs improvement)", "Low Lights", "Low lights")
         if ll_col and ll_col != "Low Lights":
             df["Low Lights"] = df[ll_col]
-        ca_col = find_col(df, "Corrective Action", "Corrective Action Required")
+        ca_col = find_col(df, "Corrective Action Required", "Corrective Action")
         if ca_col and ca_col != "Corrective Action":
             df["Corrective Action"] = df[ca_col]
+        remarks_col = find_col(df, "Remarks for any item for which rating is given below 3", "Remarks")
+        if remarks_col and remarks_col != "Remarks":
+            df["Remarks"] = df[remarks_col]
 
         return df
     except Exception as e:
@@ -400,6 +407,16 @@ def page_dashboard():
                     comment_parts.append(f"<b>Highlights:</b> {highlights}")
                 if pd.notna(lowlights) and str(lowlights).strip():
                     comment_parts.append(f"<b>Issues:</b> {lowlights}")
+                remarks = fb.get("Remarks", "")
+                if pd.notna(remarks) and str(remarks).strip():
+                    comment_parts.append(f"<b>Remarks:</b> {remarks}")
+                # Show low-rated items
+                low_items = []
+                for item in MEAL_ITEMS_RATED:
+                    if item in fb and pd.notna(fb[item]) and fb[item] <= 2:
+                        low_items.append(f"{item} ({int(fb[item])})")
+                if low_items:
+                    comment_parts.append(f'<b style="color:#EF4444">Low-rated items:</b> {", ".join(low_items)}')
                 comment_html = "<br>".join(comment_parts) if comment_parts else "<i>No comments</i>"
 
                 st.markdown(f"""
@@ -444,14 +461,27 @@ def page_analytics():
                     ).properties(height=350, title="Overall Rating Trend (Last 30 Days)")
                 st.altair_chart(line_chart + target_line, use_container_width=True)
 
-                available_criteria = [c for c in FEEDBACK_CRITERIA if c in recent.columns]
-                if available_criteria:
-                    avg_vals = recent[available_criteria].mean()
-                    criteria_df = pd.DataFrame({"Criteria": available_criteria, "Score": avg_vals.values})
-                    criteria_chart = alt.Chart(criteria_df).mark_bar(color="#0891B2", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
-                        x=alt.X("Criteria:N", sort=available_criteria), y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 5]))
-                    ).properties(height=350, title="Average Criteria Scores")
-                    st.altair_chart(criteria_chart, use_container_width=True)
+                # Per-item average ratings bar chart
+                available_items = [i for i in MEAL_ITEMS_RATED if i in recent.columns]
+                if available_items:
+                    avg_vals = recent[available_items].mean().sort_values()
+                    items_df = pd.DataFrame({"Item": avg_vals.index, "Avg Rating": avg_vals.values})
+                    items_chart = alt.Chart(items_df).mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4).encode(
+                        x=alt.X("Avg Rating:Q", scale=alt.Scale(domain=[0, 5]), title="Avg Rating"),
+                        y=alt.Y("Item:N", sort=alt.EncodingSortField(field="Avg Rating", order="ascending")),
+                        color=alt.Color("Avg Rating:Q", scale=alt.Scale(domain=[0, 2.5, 5], range=["#EF4444", "#F59E0B", "#10B981"]), legend=None)
+                    ).properties(height=400, title="Average Rating per Food Item")
+                    st.altair_chart(items_chart, use_container_width=True)
+                # Fallback: old criteria if present
+                else:
+                    available_criteria = [c for c in FEEDBACK_CRITERIA if c in recent.columns]
+                    if available_criteria:
+                        avg_vals = recent[available_criteria].mean()
+                        criteria_df = pd.DataFrame({"Criteria": available_criteria, "Score": avg_vals.values})
+                        criteria_chart = alt.Chart(criteria_df).mark_bar(color="#0891B2", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+                            x=alt.X("Criteria:N", sort=available_criteria), y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 5]))
+                        ).properties(height=350, title="Average Criteria Scores")
+                        st.altair_chart(criteria_chart, use_container_width=True)
             else:
                 st.info("No feedback data available yet.")
         else:
