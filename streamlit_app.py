@@ -5,6 +5,7 @@ import pandas as pd
 import altair as alt
 from datetime import date, timedelta
 import requests as http_requests
+import io
 
 # --- Config ---
 FOOD_ITEMS = [
@@ -27,14 +28,27 @@ def find_col(df, *candidates):
 
 
 # --- Data Loading ---
+def read_gsheet_csv(url):
+    """Robustly read a Google Sheets CSV export, handling commas in text fields."""
+    resp = http_requests.get(url, timeout=30)
+    resp.raise_for_status()
+    content = resp.text
+    # Try normal parsing first, then fallback with flexible options
+    try:
+        df = pd.read_csv(io.StringIO(content), quotechar='"', escapechar='\\')
+    except Exception:
+        df = pd.read_csv(io.StringIO(content), on_bad_lines="skip", quotechar='"')
+    df.columns = df.columns.str.strip()
+    return df
+
+
 @st.cache_data(ttl=300)
 def load_food_tracker():
     url = st.secrets.get("google_sheets", {}).get("food_tracker_url", "")
     if not url:
         return pd.DataFrame()
     try:
-        df = pd.read_csv(url, on_bad_lines="skip")
-        df.columns = df.columns.str.strip()
+        df = read_gsheet_csv(url)
         date_col = find_col(df, "Date")
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
@@ -73,8 +87,7 @@ def load_meal_feedback():
     if not url:
         return pd.DataFrame()
     try:
-        df = pd.read_csv(url, on_bad_lines="skip")
-        df.columns = df.columns.str.strip()
+        df = read_gsheet_csv(url)
 
         # Date: use Start time or Completion time if Feedback Date not present
         date_col = find_col(df, "Feedback Date", "Date", "Start time", "Completion time")
