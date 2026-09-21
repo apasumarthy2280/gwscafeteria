@@ -202,16 +202,12 @@ def page_dashboard():
     today = date.today()
 
     # --- Filters ---
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    filter_col1, filter_col2 = st.columns(2)
     with filter_col1:
         available_dates = sorted(food_df["Date"].dropna().unique().tolist(), reverse=True) if not food_df.empty and "Date" in food_df.columns else [today]
         default_idx = 0 if today in available_dates else 0
         display_date = st.selectbox("Select Date", available_dates, index=default_idx, key="dash_date")
     with filter_col2:
-        all_locations = food_df["Location"].dropna().unique().tolist() if not food_df.empty and "Location" in food_df.columns else []
-        location_options = ["All Locations"] + sorted(all_locations)
-        selected_location = st.selectbox("Select Location", location_options, key="dash_location")
-    with filter_col3:
         all_floors = food_df["Floor"].dropna().unique().tolist() if not food_df.empty and "Floor" in food_df.columns else []
         floor_options = ["All Floors"] + sorted(all_floors)
         selected_floor = st.selectbox("Select Floor", floor_options, key="dash_floor")
@@ -222,8 +218,6 @@ def page_dashboard():
     filtered_food = food_df.copy() if not food_df.empty else pd.DataFrame()
     if not filtered_food.empty and "Date" in filtered_food.columns:
         filtered_food = filtered_food[filtered_food["Date"] == display_date]
-    if not filtered_food.empty and selected_location != "All Locations" and "Location" in filtered_food.columns:
-        filtered_food = filtered_food[filtered_food["Location"] == selected_location]
     if not filtered_food.empty and selected_floor != "All Floors" and "Floor" in filtered_food.columns:
         filtered_food = filtered_food[filtered_food["Floor"] == selected_floor]
 
@@ -318,16 +312,12 @@ def page_dashboard():
     st.divider()
     st.subheader("Recent Meal Feedback")
     if not feedback_df.empty and "Feedback Date" in feedback_df.columns:
-        fb_filter1, fb_filter2, fb_filter3 = st.columns(3)
+        fb_filter1, fb_filter2 = st.columns(2)
         with fb_filter1:
             fb_dates = sorted(feedback_df["Feedback Date"].dropna().unique().tolist(), reverse=True)
             fb_date_options = ["All Dates"] + [str(d) for d in fb_dates]
             fb_date_sel = st.selectbox("Filter by Date", fb_date_options, key="fb_date_filter")
         with fb_filter2:
-            fb_locations = feedback_df["Location"].dropna().unique().tolist() if "Location" in feedback_df.columns else []
-            fb_location_options = ["All Locations"] + sorted(fb_locations)
-            fb_location_sel = st.selectbox("Filter by Location", fb_location_options, key="fb_location_filter")
-        with fb_filter3:
             fb_floors = feedback_df["Floor"].dropna().unique().tolist() if "Floor" in feedback_df.columns else []
             fb_floor_options = ["All Floors"] + sorted(fb_floors)
             fb_floor_sel = st.selectbox("Filter by Floor", fb_floor_options, key="fb_floor_filter")
@@ -335,8 +325,6 @@ def page_dashboard():
         filtered_fb = feedback_df.copy()
         if fb_date_sel != "All Dates":
             filtered_fb = filtered_fb[filtered_fb["Feedback Date"].astype(str) == fb_date_sel]
-        if fb_location_sel != "All Locations" and "Location" in filtered_fb.columns:
-            filtered_fb = filtered_fb[filtered_fb["Location"] == fb_location_sel]
         if fb_floor_sel != "All Floors" and "Floor" in filtered_fb.columns:
             filtered_fb = filtered_fb[filtered_fb["Floor"] == fb_floor_sel]
 
