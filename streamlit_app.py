@@ -49,32 +49,53 @@ def load_food_tracker():
         return pd.DataFrame()
     try:
         df = read_gsheet_csv(url)
+        # Date
         date_col = find_col(df, "Date")
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors="coerce").dt.date
             if date_col != "Date":
                 df = df.rename(columns={date_col: "Date"})
+        # Floor
         floor_col = find_col(df, "Floor")
         if floor_col and floor_col != "Floor":
             df = df.rename(columns={floor_col: "Floor"})
-        check_col = find_col(df, "Check Time", "Check_Time", "CheckTime")
+        # Check-in Time → Check Time
+        check_col = find_col(df, "Check-in Time", "Check Time", "Check_Time", "CheckTime")
         if check_col and check_col != "Check Time":
             df = df.rename(columns={check_col: "Check Time"})
-        proj_col = find_col(df, "Food Projected for the Day", "Food Projected for the day", "Projected")
-        if proj_col and proj_col != "Food Projected for the Day":
-            df = df.rename(columns={proj_col: "Food Projected for the Day"})
-        actual_col = find_col(df, "Actual Consumption", "Actual_Consumption", "Consumption")
-        if actual_col and actual_col != "Actual Consumption":
-            df = df.rename(columns={actual_col: "Actual Consumption"})
-        # Parse "Mark item availability:" multi-select into individual columns
-        avail_col = find_col(df, "Mark item availability:", "Mark item availability", "Item Availability")
-        if avail_col:
+        # Remarks
+        remarks_col = find_col(df, "Remarks to add incase of food unavailabilty", "Remarks", "Projection Comments")
+        if remarks_col and remarks_col != "Remarks":
+            df = df.rename(columns={remarks_col: "Remarks"})
+        # Parse "Mark item which is not available" — INVERTED logic (listed = unavailable)
+        unavail_col = find_col(df, "Mark item which is not available", "Mark item availability:", "Mark item availability")
+        if unavail_col:
             for item in FOOD_ITEMS:
-                df[item] = df[avail_col].astype(str).str.contains(item, case=False, na=False).map({True: "Yes", False: "No"})
-        # Ensure numeric columns
-        for c in ["Food Projected for the Day", "Actual Consumption"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+                df[item] = df[unavail_col].astype(str).str.contains(item, case=False, na=False).map({True: "No", False: "Yes"})
+        # Veg/Non-Veg projections
+        veg_proj_col = find_col(df, "Veg Food Projected for the Day", "Food Projected for the Day")
+        if veg_proj_col:
+            df["Veg Projected"] = pd.to_numeric(df[veg_proj_col], errors="coerce").fillna(0).astype(int)
+        nonveg_proj_col = find_col(df, "Non-Veg Food Projected for the Day")
+        if nonveg_proj_col:
+            df["Non-Veg Projected"] = pd.to_numeric(df[nonveg_proj_col], errors="coerce").fillna(0).astype(int)
+        # Veg/Non-Veg actual consumption
+        veg_actual_col = find_col(df, "Veg- Actual Consumption", "Actual Consumption")
+        if veg_actual_col:
+            df["Veg Actual"] = pd.to_numeric(df[veg_actual_col], errors="coerce").fillna(0).astype(int)
+        nonveg_actual_col = find_col(df, "Non Veg- Actual Consumption")
+        if nonveg_actual_col:
+            df["Non-Veg Actual"] = pd.to_numeric(df[nonveg_actual_col], errors="coerce").fillna(0).astype(int)
+        # Registrations
+        veg_reg_col = find_col(df, "No of Veg registrations received per day")
+        if veg_reg_col:
+            df["Veg Registrations"] = pd.to_numeric(df[veg_reg_col], errors="coerce").fillna(0).astype(int)
+        nonveg_reg_col = find_col(df, "No of Non-Veg registrations received per day")
+        if nonveg_reg_col:
+            df["Non-Veg Registrations"] = pd.to_numeric(df[nonveg_reg_col], errors="coerce").fillna(0).astype(int)
+        # Total projected and actual (combined)
+        df["Food Projected for the Day"] = df.get("Veg Projected", 0) + df.get("Non-Veg Projected", 0)
+        df["Actual Consumption"] = df.get("Veg Actual", 0) + df.get("Non-Veg Actual", 0)
         return df
     except Exception as e:
         st.error(f"Error loading Food Tracker: {e}")
@@ -234,7 +255,7 @@ def page_dashboard():
     if not filtered_food.empty and selected_floor != "All Floors" and "Floor" in filtered_food.columns:
         filtered_food = filtered_food[filtered_food["Floor"] == selected_floor]
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     avail_pct = 0
     if not filtered_food.empty:
@@ -247,11 +268,10 @@ def page_dashboard():
                         available_checks += 1
         avail_pct = round((available_checks / total_checks) * 100, 1) if total_checks > 0 else 0
 
-    projected, actual = 0, 0
-    if not filtered_food.empty and "Food Projected for the Day" in filtered_food.columns:
-        projected = int(filtered_food["Food Projected for the Day"].sum())
-        if "Actual Consumption" in filtered_food.columns:
-            actual = int(filtered_food["Actual Consumption"].sum())
+    veg_proj = int(filtered_food["Veg Projected"].sum()) if not filtered_food.empty and "Veg Projected" in filtered_food.columns else 0
+    nv_proj = int(filtered_food["Non-Veg Projected"].sum()) if not filtered_food.empty and "Non-Veg Projected" in filtered_food.columns else 0
+    veg_actual = int(filtered_food["Veg Actual"].sum()) if not filtered_food.empty and "Veg Actual" in filtered_food.columns else 0
+    nv_actual = int(filtered_food["Non-Veg Actual"].sum()) if not filtered_food.empty and "Non-Veg Actual" in filtered_food.columns else 0
 
     avg_r = 0
     if not feedback_df.empty and "Feedback Date" in feedback_df.columns and "Overall Rating" in feedback_df.columns:
@@ -262,11 +282,15 @@ def page_dashboard():
     with col1:
         st.markdown(f'<div class="metric-card"><div class="metric-value">{avail_pct}%</div><div class="metric-label">Food Availability</div></div>', unsafe_allow_html=True)
     with col2:
-        st.markdown(f'<div class="metric-card"><div class="metric-value">{projected}</div><div class="metric-label">Meals Projected</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{veg_proj}</div><div class="metric-label">Veg Projected</div></div>', unsafe_allow_html=True)
     with col3:
-        st.markdown(f'<div class="metric-card"><div class="metric-value">{actual}</div><div class="metric-label">Actual Consumption</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{veg_actual}</div><div class="metric-label">Veg Actual</div></div>', unsafe_allow_html=True)
     with col4:
-        st.markdown(f'<div class="metric-card"><div class="metric-value">{avg_r}/5</div><div class="metric-label">Avg Rating (7 days)</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{nv_proj}</div><div class="metric-label">Non-Veg Projected</div></div>', unsafe_allow_html=True)
+    with col5:
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{nv_actual}</div><div class="metric-label">Non-Veg Actual</div></div>', unsafe_allow_html=True)
+    with col6:
+        st.markdown(f'<div class="metric-card"><div class="metric-value">{avg_r}/5</div><div class="metric-label">Avg Rating (7d)</div></div>', unsafe_allow_html=True)
 
     if display_date != today:
         st.caption(f"Showing data for {display_date}. Select today's date if available.")
